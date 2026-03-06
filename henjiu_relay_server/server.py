@@ -3,6 +3,7 @@
 import logging
 import asyncio
 import secrets
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Header
@@ -13,6 +14,7 @@ from .config import settings, UserConfig
 from .router import router
 from .websocket import ws_server, start_websocket_server
 from .admin import admin_router
+from . import database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,10 +27,10 @@ async def verify_api_auth(
 ):
     """验证 API 认证 - 支持 API Key 或 Basic Auth"""
     
-    # 方法1: API Key
+    # 方法1: API Key (优先查数据库)
     if x_api_key:
-        user = settings.get_user_by_api_key(x_api_key)
-        if user and user.enabled:
+        user = await database.get_user_by_api_key(x_api_key)
+        if user and user.get("enabled"):
             return user
     
     # 方法2: Basic Auth
@@ -37,8 +39,8 @@ async def verify_api_auth(
         try:
             credentials = base64.b64decode(authorization[6:]).decode()
             username, password = credentials.split(":", 1)
-            user = settings.get_user_by_credentials(username, password)
-            if user and user.enabled:
+            user = await database.get_user_by_credentials(username, password)
+            if user and user.get("enabled"):
                 return user
         except:
             pass
@@ -53,7 +55,7 @@ async def verify_admin(
     """验证管理员权限 - 需要 admin 角色"""
     user = await verify_api_auth(x_api_key, authorization)
     
-    if user.role != "admin":
+    if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
     return user
@@ -65,6 +67,23 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting OpenClaw Relay")
     logger.info(f"HTTP server: {settings.host}:{settings.port}")
     logger.info(f"WebSocket server: {settings.host}:8081")
+    
+    # 初始化数据库
+    db_path = await database.init_db()
+    logger.info(f"Database initialized: {db_path}")
+    
+    # 如果没有用户，从环境变量创建默认用户 (root 管理员)
+    users = await database.list_users()
+    if not users:
+        admin_username = os.getenv("ADMIN_USERNAME", "arno")
+        admin_password = os.getenv("ADMIN_PASSWORD", "123456")
+        await database.add_user(
+            username=admin_username,
+            password=admin_password,
+            role="admin",
+            is_root=True,  # 超级管理员，不可删除
+        )
+        logger.info(f"Created root admin user: {admin_username}")
     
     # 启动 WebSocket 服务器
     ws_task = asyncio.create_task(start_websocket_server())
@@ -298,70 +317,63 @@ class AddUserRequest(BaseModel):
 async def add_user(request: AddUserRequest):
     """添加用户"""
     # Check if user already exists
-    for user in settings.users:
-        if user.username == request.username:
+    users = await database.list_users()
+    for user in users:
+        if user["username"] == request.username:
             return {"error": "Username already exists"}
     
     # Generate API key if not provided
     if not request.api_key:
         request.api_key = secrets.token_urlsafe(32)
     
-    new_user = UserConfig(
+    new_user = await database.add_user(
         username=request.username,
         password=request.password,
-        api_key=request.api_key,
         role=request.role,
+        api_key=request.api_key,
     )
-    settings.users.append(new_user)
     
     return {
         "success": True,
-        "user": {
-            "username": new_user.username,
-            "api_key": new_user.api_key,
-            "role": new_user.role,
-        }
+        "user": new_user
     }
 
 
 @app.get("/api/users", dependencies=[Depends(verify_admin)])
 async def list_users():
     """列出用户 (不包含密码)"""
+    users = await database.list_users()
     return {
         "users": [
             {
-                "username": u.username,
-                "api_key": u.api_key[:8] + "..." if u.api_key else "",
-                "role": u.role,
-                "enabled": u.enabled,
+                "username": u["username"],
+                "api_key": (u["api_key"][:8] + "...") if u.get("api_key") else "",
+                "role": u["role"],
+                "enabled": u.get("enabled", 1) == 1,
             }
-            for u in settings.users
+            for u in users
         ]
     }
 
 
 @app.delete("/api/users/{username}", dependencies=[Depends(verify_admin)])
 async def delete_user(username: str):
-    """删除用户"""
-    for i, user in enumerate(settings.users):
-        if user.username == username:
-            if len(settings.users) == 1:
-                return {"error": "Cannot delete the last user"}
-            settings.users.pop(i)
-            return {"success": True}
-    return {"error": "User not found"}
+    """删除用户 (不能删除 root 用户)"""
+    success = await database.delete_user(username)
+    if success:
+        return {"success": True}
+    return {"error": "Cannot delete root user or user not found"}
 
 
 @app.post("/api/users/{username}/regenerate-key", dependencies=[Depends(verify_admin)])
 async def regenerate_api_key(username: str):
     """重新生成用户的 API Key"""
-    for user in settings.users:
-        if user.username == username:
-            user.api_key = secrets.token_urlsafe(32)
-            return {
-                "success": True,
-                "api_key": user.api_key,
-            }
+    new_key = await database.regenerate_user_api_key(username)
+    if new_key:
+        return {
+            "success": True,
+            "api_key": new_key,
+        }
     return {"error": "User not found"}
 
 
@@ -381,3 +393,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+@app.post("/api/users/{username}/password", dependencies=[Depends(verify_admin)])
+async def change_password(username: str, data: dict):
+    """修改用户密码"""
+    new_password = data.get("password")
+    if not new_password:
+        return {"error": "Missing password"}
+    
+    await database.update_user_password(username, new_password)
+    return {"success": True, "message": "Password updated"}

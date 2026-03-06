@@ -1,13 +1,16 @@
 """Admin UI routes"""
 
 import logging
-from fastapi import APIRouter, Request, Depends, HTTPException, status
+import os
+from fastapi import APIRouter, Request, Depends, HTTPException, status, Header
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse
 from pathlib import Path
+from typing import Optional
 
 from .router import router
 from .config import settings
+from . import database
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +18,9 @@ admin_router = APIRouter(prefix="/admin", tags=["admin"])
 security = HTTPBasic()
 
 
-def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) -> bool:
+async def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) -> dict:
     """验证用户名密码 - 支持多用户"""
-    user = settings.get_user_by_credentials(credentials.username, credentials.password)
+    user = await database.get_user_by_credentials(credentials.username, credentials.password)
     
     if not user:
         raise HTTPException(
@@ -26,13 +29,13 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) ->
             headers={"WWW-Authenticate": "Basic"},
         )
     
-    if not user.enabled:
+    if not user.get("enabled"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User disabled",
         )
     
-    return True
+    return user
 
 
 # HTML Templates
@@ -950,22 +953,25 @@ USERS_PAGE = """
         
         <div class="card">
             <h2>添加用户</h2>
-            <div class="form-group">
-                <label>用户名</label>
-                <input type="text" id="newUsername" placeholder="用户名">
-            </div>
-            <div class="form-group">
-                <label>密码</label>
-                <input type="password" id="newPassword" placeholder="密码">
-            </div>
-            <div class="form-group">
-                <label>角色</label>
-                <select id="newRole">
-                    <option value="user">普通用户</option>
-                    <option value="admin">管理员</option>
-                </select>
-            </div>
-            <button class="btn btn-success" onclick="addUser()">添加用户</button>
+            <form method="get">
+                <input type="hidden" name="action" value="add">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" name="username" placeholder="用户名" required>
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" name="password" placeholder="密码" required>
+                </div>
+                <div class="form-group">
+                    <label>角色</label>
+                    <select name="role">
+                        <option value="user">普通用户</option>
+                        <option value="admin">管理员</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success">添加用户</button>
+            </form>
         </div>
         
         <div class="card" style="background: #e8f5e9; border: 2px solid #4caf50;">
@@ -1009,6 +1015,7 @@ USERS_PAGE = """
                             <td>${u.enabled ? '启用' : '禁用'}</td>
                             <td>
                                 <button class="btn btn-warning" onclick="regenerateKey('${u.username}')">🔄 重置 Key</button>
+                                <button class="btn btn-primary" onclick="changePassword('${u.username}')">✏️ 修改密码</button>
                             </td>
                         </tr>
                     `).join('');
@@ -1031,9 +1038,12 @@ USERS_PAGE = """
             }
             
             try {
-                const resp = await fetch('/api/users', {headers: {'X-API-Key': 'PAGE_REPLACE_KEY'},
+                const resp = await fetch('/api/users', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': 'PAGE_REPLACE_KEY'
+                    },
                     body: JSON.stringify({username, password, role})
                 });
                 const data = await resp.json();
@@ -1051,12 +1061,57 @@ USERS_PAGE = """
             }
         }
         
-        async function regenerateKey(username) {
-            if (!confirm('确定要重置 ' + username + ' 的 API Key 吗?')) return;
+        async function changePassword(username) {
+            const newPassword = prompt("请输入新密码:");
+            if (!newPassword) return;
+            
+            fetch('/api/users/' + username + '/password', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': 'PAGE_REPLACE_KEY'
+                },
+                body: JSON.stringify({password: newPassword})
+            })
+            .then(resp => resp.json())
+            .then(data => {
+                if (data.error) {
+                    showMessage(data.error, 'error');
+                } else {
+                    showMessage('密码已修改', 'success');
+                }
+            })
+            .catch(e => showMessage('修改失败: ' + e, 'error'));
+        }
+            }
+        }
+        
+        async function deleteUser(username) {
+            if (!confirm('确定要删除用户 ' + username + ' 吗?')) return;
             
             try {
-                const resp = await fetch('/api/users/' + username + '/regenerate-key', {headers: {'X-API-Key': 'PAGE_REPLACE_KEY'},
-                    method: 'POST'
+                const resp = await fetch('/api/users/' + username, {
+                    method: 'DELETE',
+                    headers: {'X-API-Key': 'PAGE_REPLACE_KEY'}
+                });
+                const data = await resp.json();
+                
+                if (data.error) {
+                    showMessage(data.error, 'error');
+                } else {
+                    showMessage('用户已删除', 'success');
+                    loadUsers();
+                }
+            } catch(e) {
+                showMessage('删除失败: ' + e, 'error');
+            }
+        }
+        
+        async function regenerateKey(username) {
+            // 直接执行，不弹确认框
+            fetch('/api/users/' + username + '/regenerate-key', {
+                    method: 'POST',
+                    headers: {'X-API-Key': 'PAGE_REPLACE_KEY'}
                 });
                 const data = await resp.json();
                 
@@ -1078,6 +1133,7 @@ USERS_PAGE = """
         }
         
         loadUsers();
+        console.log('Page loaded, calling loadUsers');
     </script>
 </body>
 </html>
@@ -1085,16 +1141,102 @@ USERS_PAGE = """
 
 
 @admin_router.get("/users", response_class=HTMLResponse)
-async def users_page(_: bool = Depends(verify_credentials)):
+async def users_page(current_user: dict = Depends(verify_credentials), request: Request = None):
     """用户管理页面"""
-    from .server import settings
     # 获取当前用户的 API Key
-    current_key = settings.users[0].api_key if settings.users else ""
-    current_username = settings.users[0].username if settings.users else ""
+    current_key = current_user.get("api_key", "")
+    current_username = current_user.get("username", "")
+    
+    # 获取所有用户数据 (服务端渲染)
+    from . import database
+    users = await database.list_users()
+    
+    # 处理表单操作 (不需要 JavaScript)
+    message = ""
+    message_type = "success"
+    
+    if request:
+        # 重置 API Key
+        if request.query_params.get("action") == "regenerate":
+            target_user = request.query_params.get("username")
+            if target_user:
+                new_key = await database.regenerate_user_api_key(target_user)
+                if new_key:
+                    message = f"用户 {target_user} 的 API Key 已重置: {new_key}"
+                else:
+                    message = f"用户 {target_user} 不存在"
+                    message_type = "error"
+        
+        # 修改密码
+        elif request.query_params.get("action") == "password":
+            target_user = request.query_params.get("username")
+            new_password = request.query_params.get("password")
+            if target_user and new_password:
+                await database.update_user_password(target_user, new_password)
+                message = f"用户 {target_user} 的密码已修改"
+            else:
+                message = "请提供用户名和新密码"
+                message_type = "error"
+        
+        # 添加用户
+        elif request.query_params.get("action") == "add":
+            new_username = request.query_params.get("username")
+            new_password = request.query_params.get("password")
+            new_role = request.query_params.get("role", "user")
+            if new_username and new_password:
+                try:
+                    await database.add_user(new_username, new_password, new_role)
+                    message = f"用户 {new_username} 添加成功"
+                except Exception as e:
+                    message = f"添加失败: {str(e)}"
+                    message_type = "error"
+            else:
+                message = "请提供用户名和密码"
+                message_type = "error"
+        
+        # 刷新用户列表
+        users = await database.list_users()
+    
+    # 构建用户列表的 HTML
+    users_html = ""
+    if users:
+        for u in users:
+            api_key_display = (u.get("api_key", "")[:8] + "...") if u.get("api_key") else "(无)"
+            role_display = "管理员" if u.get("role") == "admin" else "用户"
+            enabled_display = "启用" if u.get("enabled") else "禁用"
+            users_html += f"""
+                <tr>
+                    <td>{u.get("username", "")}</td>
+                    <td><span class="api-key">{api_key_display}</span></td>
+                    <td><span class="badge badge-{u.get("role", "user")}">{role_display}</span></td>
+                    <td>{enabled_display}</td>
+                    <td>
+                        <a href="?action=regenerate&username={u.get('username', '')}" class="btn btn-warning" onclick="return confirm('确定要重置 {u.get('username', '')} 的 API Key 吗?')">🔄 重置 Key</a>
+                        <form method="get" style="display:inline;">
+                            <input type="hidden" name="action" value="password">
+                            <input type="hidden" name="username" value="{u.get('username', '')}">
+                            <input type="text" name="password" placeholder="新密码" style="width:80px;">
+                            <button type="submit" class="btn btn-primary">✏️</button>
+                        </form>
+                    </td>
+                </tr>
+            """
+    else:
+        users_html = '<tr><td colspan="5">暂无用户</td></tr>'
+    
     # 返回页面，注入当前用户信息
     page = USERS_PAGE.replace("CURRENT_USER_API_KEY", current_key).replace("CURRENT_USERNAME", current_username)
+    # 替换 "加载中..." 为实际用户数据
+    page = page.replace('<td colspan="5">加载中...</td>', users_html)
     # 替换页面中的 fetch，使用当前用户的 API key
     page = page.replace("fetch('/api/users')", "fetch('/api/users', {headers: {'X-API-Key': '" + current_key + "'}})")
+    # 替换其他 API 调用中的 PAGE_REPLACE_KEY
+    page = page.replace("'X-API-Key': 'PAGE_REPLACE_KEY'", "'X-API-Key': '" + current_key + "'")
+    
+    # 添加消息提示
+    if message:
+        page = page.replace('<div id="message"></div>', f'<div id="message"><div class="alert alert-{message_type}">{message}</div></div>')
+    
     return page
 
 
