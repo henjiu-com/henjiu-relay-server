@@ -138,6 +138,10 @@ ADMIN_PAGE = """
                 <h3>编辑实例</h3>
                 <input type="hidden" id="editId">
                 <div class="form-group">
+                    <label>实例ID</label>
+                    <input type="text" id="editIdDisplay" readonly style="background:#e9ecef;">
+                </div>
+                <div class="form-group">
                     <label>名称</label>
                     <input type="text" id="editName" placeholder="实例名称">
                 </div>
@@ -241,6 +245,7 @@ ADMIN_PAGE = """
             const inst = instances.find(i => i.id === id);
             if (!inst) return;
             document.getElementById('editId').value = id;
+            document.getElementById('editIdDisplay').value = id;
             document.getElementById('editName').value = inst.name || '';
             document.getElementById('editUrl').value = inst.url || '';
             document.getElementById('editToken').value = inst.auth_token || '';
@@ -407,7 +412,42 @@ DASHBOARD_PAGE = """
         
         async function loadData() {
             await Promise.all([loadInstances(), loadSessions()]);
+            renderInstances();
             updateStats();
+        }
+        
+        async function checkInstanceStatus(instanceId) {
+            try {
+                const headers = new Headers({});
+                if (!window.location.href.includes('@')) {
+                    headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+                }
+                const resp = await fetch('/api/instances/' + instanceId + '/status', { headers });
+                const data = await resp.json();
+                alert(instanceId + ': ' + (data.online ? '在线' : '离线'));
+            } catch(e) {
+                alert('检查失败: ' + e);
+            }
+        }
+        
+        async function viewInstanceSessions(instanceId) {
+            try {
+                const headers = new Headers({});
+                if (!window.location.href.includes('@')) {
+                    headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+                }
+                const resp = await fetch('/api/sessions?instance_id=' + instanceId, { headers });
+                const data = await resp.json();
+                const sessions = data[instanceId] || [];
+                if (sessions.length === 0) {
+                    alert('暂无活动会话');
+                } else {
+                    const sessionInfo = sessions.map(s => s.key || s.id || s.session_key).join('\\n');
+                    alert('活动会话 (' + sessions.length + '):\\n' + sessionInfo);
+                }
+            } catch(e) {
+                alert('获取会话失败: ' + e);
+            }
         }
         
         async function loadInstances() {
@@ -419,7 +459,6 @@ DASHBOARD_PAGE = """
                 const resp = await fetch('/api/instances', { headers });
                 const data = await resp.json();
                 instances = data.instances || [];
-                renderInstances();
             } catch(e) {
                 console.error(e);
             }
@@ -456,6 +495,10 @@ DASHBOARD_PAGE = """
                     </div>
                     <div class="instance-body">
                         <div class="info-row">
+                            <span class="info-label">ID</span>
+                            <span class="info-value">${inst.id}</span>
+                        </div>
+                        <div class="info-row">
                             <span class="info-label">URL</span>
                             <span class="info-value">${inst.url}</span>
                         </div>
@@ -469,8 +512,8 @@ DASHBOARD_PAGE = """
                         </div>
                     </div>
                     <div class="instance-footer">
-                        <a href="/api/instances/${inst.id}/status" target="_blank" class="btn btn-outline">🔄 检查</a>
-                        <a href="/api/sessions?instance_id=${inst.id}" target="_blank" class="btn btn-primary">📋 会话</a>
+                        <button class="btn btn-outline" onclick="checkInstanceStatus('${inst.id}')">🔄 检查</button>
+                        <button class="btn btn-primary" onclick="viewInstanceSessions('${inst.id}')">📋 会话</button>
                     </div>
                 </div>
                 `;
@@ -696,7 +739,11 @@ fetch('http://localhost:8080/api/send', {
     'Content-Type': 'application/json',
     'X-API-Key': 'your-api-key'
   },
-  body: JSON.stringify({message: "Hello"})
+  body: JSON.stringify({
+    message: "Hello",
+    instance_id: "cc2-openclaw",  // 必填
+    target: "user123"              // 可选
+  })
 })</code></pre>
             
             <h3>方式2: 管理员 Basic Auth</h3>
@@ -738,25 +785,26 @@ requests.get('http://localhost:8080/api/users', auth=('admin', 'password'))</cod
             <div class="endpoint">
                 <span class="method post">POST</span>
                 <span class="path">/api/send</span>
-                <p class="description">发送消息到远程 OpenClaw 实例，根据路由规则自动分发</p>
+                <p class="description">发送消息到指定的 OpenClaw 实例（通过 WebSocket）</p>
                 <div class="params">
-                    <div class="param"><span class="param-name">message</span> <span class="param-type">string</span> <span class="param-required">必填</span></div>
-                    <div class="param"><span class="param-name">channel</span> <span class="param-type">string</span> 默认: telegram</div>
-                    <div class="param"><span class="param-name">sender_id</span> <span class="param-type">string</span> 发送者ID，用于路由匹配</div>
-                    <div class="param"><span class="param-name">target</span> <span class="param-type">string</span> 目标用户ID</div>
-                    <div class="param"><span class="param-name">instance_id</span> <span class="param-type">string</span> 直接指定实例ID</div>
+                    <div class="param"><span class="param-name">message</span> <span class="param-type">string</span> <span class="param-required">必填</span> 消息内容</div>
+                    <div class="param"><span class="param-name">instance_id</span> <span class="param-type">string</span> <span class="param-required">必填</span> 目标实例ID</div>
+                    <div class="param"><span class="param-name">target</span> <span class="param-type">string</span> 目标用户/聊天ID</div>
+                    <div class="param"><span class="param-name">sender_id</span> <span class="param-type">string</span> 发送者ID</div>
+                    <div class="param"><span class="param-name">metadata</span> <span class="param-type">object</span> 额外元数据</div>
                 </div>
-                <pre><code># 请求 (使用用户的 API Key)
+                <pre><code># 请求
 curl -X POST http://localhost:8080/api/send \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: your-api-key" \\
-  -d '{"message": "Hello", "channel": "telegram"}'
+  -d '{"message": "Hello", "instance_id": "cc2-openclaw"}'
 
 # 响应
 {
   "success": true,
-  "message_id": "msg-123",
-  "instance_id": "a"
+  "message_id": "ws-cc2-openclaw-xxx",
+  "instance_id": "cc2-openclaw",
+  "reply": null  // OpenClaw 的回复（如果有）
 }</code></pre>
             </div>
         </div>
