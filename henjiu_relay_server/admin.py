@@ -403,15 +403,108 @@ DASHBOARD_PAGE = """
 
 
 @admin_router.get("/", response_class=HTMLResponse)
-async def admin_page(_: bool = Depends(verify_credentials)):
-    """管理页面"""
-    return ADMIN_PAGE
+async def admin_page(current_user: dict = Depends(verify_credentials)):
+    """管理页面 - 服务端渲染"""
+    from .websocket import ws_server
+    connected_ids = set(ws_server.connections.keys())
+    from .router import router
+    instances = router.list_instances()
+    
+    # 构建实例 HTML
+    instances_html = ""
+    for inst in instances:
+        inst_id = inst.get("id", "")
+        is_online = inst_id in connected_ids
+        status_class = "status-online" if is_online else "status-offline"
+        status_text = "在线" if is_online else "离线"
+        
+        instances_html += f"""
+        <div class="instance">
+            <h3>{inst.get('name', inst.get('id', 'Unknown'))}</h3>
+            <p class="url">{inst.get('url', '-')}</p>
+            <span class="status {status_class}">{status_text}</span>
+        </div>
+        """
+    
+    if not instances_html:
+        instances_html = '<p>暂无实例，请添加</p>'
+    
+    # 替换
+    page = ADMIN_PAGE
+    page = page.replace('id="instances"></div>', f'id="instances">{instances_html}</div>')
+    
+    return page
 
 
 @admin_router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page(_: bool = Depends(verify_credentials)):
+async def dashboard_page(current_user: dict = Depends(verify_credentials)):
     """监控台页面"""
-    return DASHBOARD_PAGE
+    # 获取实例数据 - 从配置读取
+    from .config import settings
+    
+    # 获取连接的实例
+    from .websocket import ws_server
+    connected_ids = set(ws_server.connections.keys())
+    
+    # 构建实例卡片 HTML
+    instances_html = ""
+    online_count = 0
+    
+    # 从配置读取实例
+    instances = []
+    if hasattr(settings, 'instances'):
+        for inst in settings.instances:
+            inst_dict = {
+                "id": inst.id if hasattr(inst, 'id') else inst.get('id'),
+                "name": inst.name if hasattr(inst, 'name') else inst.get('name'),
+                "url": inst.url if hasattr(inst, 'url') else inst.get('url'),
+                "auth_type": inst.auth.type if hasattr(inst, 'auth') and inst.auth else 'none'
+            }
+            instances.append(inst_dict)
+    
+    for inst in instances:
+        inst_id = inst.get("id", "")
+        is_online = inst_id in connected_ids
+        if is_online:
+            online_count += 1
+        
+        status_class = "status-online" if is_online else "status-offline"
+        status_text = "在线" if is_online else "离线"
+        
+        instances_html += f"""
+        <div class="instance-card">
+            <div class="instance-header">
+                <span class="instance-name">{inst.get('name', inst.get('id', 'Unknown'))}</span>
+                <span class="status-badge {status_class}">{status_text}</span>
+            </div>
+            <div class="instance-body">
+                <div class="info-row">
+                    <span class="info-label">ID</span>
+                    <span class="info-value">{inst.get('id', '-')}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">URL</span>
+                    <span class="info-value">{inst.get('url', '-')}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">类型</span>
+                    <span class="info-value">{inst.get('auth_type', 'none')}</span>
+                </div>
+            </div>
+        </div>
+        """
+    
+    if not instances_html:
+        instances_html = '<p style="color:white;text-align:center;">暂无实例</p>'
+    
+    # 替换模板中的变量
+    page = DASHBOARD_PAGE
+    page = page.replace('"totalInstances">-"', f'"totalInstances">{len(instances)}"')
+    page = page.replace('"onlineInstances">-"', f'"onlineInstances">{online_count}"')
+    page = page.replace('"offlineInstances">-"', f'"offlineInstances">{len(instances) - online_count}"')
+    page = page.replace('id="instances"></div>', f'id="instances">{instances_html}</div>')
+    
+    return page
 
 
 # API Docs Page
@@ -1146,16 +1239,18 @@ async def users_page(current_user: dict = Depends(verify_credentials), request: 
     # 获取当前用户的 API Key
     current_key = current_user.get("api_key", "")
     current_username = current_user.get("username", "")
+    current_role = current_user.get("role", "user")
+    is_admin = current_role == "admin" or current_user.get("is_root", 0) == 1
     
     # 获取所有用户数据 (服务端渲染)
     from . import database
     users = await database.list_users()
     
-    # 处理表单操作 (不需要 JavaScript)
+    # 处理表单操作 (不需要 JavaScript) - 仅管理员可操作
     message = ""
     message_type = "success"
     
-    if request:
+    if request and is_admin:
         # 重置 API Key
         if request.query_params.get("action") == "regenerate":
             target_user = request.query_params.get("username")
@@ -1196,6 +1291,9 @@ async def users_page(current_user: dict = Depends(verify_credentials), request: 
         
         # 刷新用户列表
         users = await database.list_users()
+    elif request and not is_admin:
+        message = "权限不足，只有管理员可操作用户"
+        message_type = "error"
     
     # 构建用户列表的 HTML
     users_html = ""
@@ -1204,21 +1302,27 @@ async def users_page(current_user: dict = Depends(verify_credentials), request: 
             api_key_display = (u.get("api_key", "")[:8] + "...") if u.get("api_key") else "(无)"
             role_display = "管理员" if u.get("role") == "admin" else "用户"
             enabled_display = "启用" if u.get("enabled") else "禁用"
+            
+            # 只有管理员可以看到操作按钮
+            action_buttons = ""
+            if is_admin:
+                action_buttons = f"""
+                    <a href="?action=regenerate&username={u.get('username', '')}" class="btn btn-warning">🔄 重置 Key</a>
+                    <form method="get" style="display:inline;">
+                        <input type="hidden" name="action" value="password">
+                        <input type="hidden" name="username" value="{u.get('username', '')}">
+                        <input type="text" name="password" placeholder="新密码" style="width:80px;">
+                        <button type="submit" class="btn btn-primary">✏️</button>
+                    </form>
+                """
+            
             users_html += f"""
                 <tr>
                     <td>{u.get("username", "")}</td>
                     <td><span class="api-key">{api_key_display}</span></td>
                     <td><span class="badge badge-{u.get("role", "user")}">{role_display}</span></td>
                     <td>{enabled_display}</td>
-                    <td>
-                        <a href="?action=regenerate&username={u.get('username', '')}" class="btn btn-warning" onclick="return confirm('确定要重置 {u.get('username', '')} 的 API Key 吗?')">🔄 重置 Key</a>
-                        <form method="get" style="display:inline;">
-                            <input type="hidden" name="action" value="password">
-                            <input type="hidden" name="username" value="{u.get('username', '')}">
-                            <input type="text" name="password" placeholder="新密码" style="width:80px;">
-                            <button type="submit" class="btn btn-primary">✏️</button>
-                        </form>
-                    </td>
+                    <td>{action_buttons}</td>
                 </tr>
             """
     else:
@@ -1232,6 +1336,11 @@ async def users_page(current_user: dict = Depends(verify_credentials), request: 
     page = page.replace("fetch('/api/users')", "fetch('/api/users', {headers: {'X-API-Key': '" + current_key + "'}})")
     # 替换其他 API 调用中的 PAGE_REPLACE_KEY
     page = page.replace("'X-API-Key': 'PAGE_REPLACE_KEY'", "'X-API-Key': '" + current_key + "'")
+    
+    # 非管理员隐藏添加用户表单
+    if not is_admin:
+        page = page.replace('<form method="get">\n                <input type="hidden" name="action" value="add">', '<div style="display:none"><form method="get">\n                <input type="hidden" name="action" value="add">')
+        page = page.replace('</form>\n        </div>\n        \n        <div class="card" style="background: #e8f5e9', '</form></div>\n        </div>\n        \n        <div class="card" style="background: #e8f5e9')
     
     # 添加消息提示
     if message:

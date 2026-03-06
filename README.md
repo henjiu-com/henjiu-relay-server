@@ -39,6 +39,8 @@
 - 🔐 **多层认证** - 管理界面 Basic Auth + API Key + 实例 Token
 - 📊 **监控面板** - 实时查看连接状态
 - 🔄 **自动重连** - 连接断开自动重连
+- 💾 **SQLite 数据库** - 用户数据持久化存储
+- 🛡️ **Root 用户** - 超级管理员，不可删除
 
 ## 快速开始
 
@@ -49,14 +51,47 @@
 cd henjiu-relay-server
 
 # 安装依赖
-pip install -e .
+pip3 install fastapi uvicorn httpx websockets pydantic pydantic-settings python-dotenv aiosqlite
 
 # 配置 .env 文件
 cp .env.example .env
 # 编辑 .env 填入配置
 
-# 启动服务
+# 启动服务 (前台运行)
 python3 -m henjiu_relay_server.server
+
+# 或后台运行
+nohup python3 -m henjiu_relay_server.server > /var/log/henjiu.log 2>&1 &
+```
+
+### 2. 服务管理 (生产环境推荐使用 systemd)
+
+```bash
+# 创建 systemd 服务文件
+sudo tee /etc/systemd/system/henjiu-relay.service > /dev/null << 'EOF'
+[Unit]
+Description=Henjiu Relay Server
+After=network.target
+
+[Service]
+Type=simple
+User=feng
+WorkingDirectory=/Users/feng/projects/henjiu-relay-server
+ExecStart=/usr/local/bin/python3 -m henjiu_relay_server.server
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 启动服务
+sudo systemctl daemon-reload
+sudo systemctl start henjiu-relay
+sudo systemctl enable henjiu-relay
+
+# 查看状态
+sudo systemctl status henjiu-relay
 ```
 
 ### 2. 远程插件部署
@@ -162,12 +197,12 @@ curl -X POST http://IP:8080/api/send \
 HOST=0.0.0.0
 PORT=8080
 
-# 管理员账号
+# 管理员账号 (会创建为 root 用户，不可删除)
 ADMIN_USERNAME=arno
 ADMIN_PASSWORD=123456
 
 # 实例配置 (JSON)
-INSTANCES=[
+OPENCLAW_URLS=[
   {
     "id": "tianyi",
     "name": "天翼云-冯麟",
@@ -177,6 +212,13 @@ INSTANCES=[
   }
 ]
 ```
+
+### 数据库
+
+用户数据存储在 `data/henjiu.db` (SQLite)。
+
+- 用户**: 从环境 **root变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建，不可删除
+- **普通用户**: 通过管理界面添加，可删除
 
 ### 插件配置
 
@@ -210,7 +252,9 @@ henjiu-relay-server/
 │   ├── websocket.py     # WebSocket 服务
 │   ├── router.py        # 消息路由
 │   ├── config.py        # 配置管理
-│   └── admin.py        # 管理界面
+│   ├── admin.py        # 管理界面
+│   └── database.py     # SQLite 数据库
+├── data/                # 数据目录 (henjiu.db)
 ├── henjiu-connector/   # 远程插件
 │   ├── index.js        # 插件主文件
 │   ├── package.json
@@ -230,13 +274,17 @@ ssh user@server "mkdir -p /opt/henjiu-relay"
 scp -r . user@server:/opt/henjiu-relay/
 
 # 3. 安装依赖
-ssh user@server "cd /opt/henjiu-relay && pip install -e ."
+ssh user@server "cd /opt/henjiu-relay && pip3 install fastapi uvicorn httpx websockets pydantic pydantic-settings python-dotenv aiosqlite"
 
 # 4. 配置
 ssh user@server "vim /opt/henjiu-relay/.env"
 
-# 5. 启动
-ssh user@server "cd /opt/henjiu-relay && python3 -m henjiu_relay_server.server"
+# 5. 启动 (推荐使用 systemd)
+# 方法1: nohup
+ssh user@server "cd /opt/henjiu-relay && nohup python3 -m henjiu_relay_server.server > /var/log/henjiu.log 2>&1 &"
+
+# 方法2: systemd (推荐)
+# 创建 /etc/systemd/system/henjiu-relay.service 并启用
 ```
 
 ## 优势对比
