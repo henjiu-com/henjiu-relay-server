@@ -407,6 +407,7 @@ DASHBOARD_PAGE = """
         
         async function loadData() {
             await Promise.all([loadInstances(), loadSessions()]);
+            renderInstances();
             updateStats();
         }
         
@@ -419,7 +420,6 @@ DASHBOARD_PAGE = """
                 const resp = await fetch('/api/instances', { headers });
                 const data = await resp.json();
                 instances = data.instances || [];
-                renderInstances();
             } catch(e) {
                 console.error(e);
             }
