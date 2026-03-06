@@ -19,6 +19,7 @@ class RelayWebSocket:
     def __init__(self):
         self.connections: dict[str, WebSocketServerProtocol] = {}
         self.instance_info: dict[str, dict] = {}
+        self.pending_replies: dict[str, asyncio.Future] = {}
     
     async def register(self, instance_id: str, websocket: WebSocketServerProtocol, info: dict = None):
         """注册连接"""
@@ -55,6 +56,45 @@ class RelayWebSocket:
             logger.error(f"Failed to send to {instance_id}: {e}")
             await self.unregister(instance_id)
             return False
+    
+    async def send_and_wait_reply(self, instance_id: str, message: dict, timeout: float = 30.0) -> str | None:
+        """发送消息到指定实例并等待回复"""
+        if instance_id not in self.connections:
+            logger.warning(f"Instance {instance_id} not connected")
+            return None
+        
+        import asyncio
+        from datetime import datetime
+        
+        # 创建 Future 等待回复
+        reply_future = asyncio.Future()
+        msg_id = f"{datetime.now().timestamp()}"
+        self.pending_replies[msg_id] = reply_future
+        
+        try:
+            # 发送消息带上 msg_id
+            message["msg_id"] = msg_id
+            ws = self.connections[instance_id]
+            await ws.send(json.dumps(message))
+            
+            # 等待回复或超时
+            try:
+                reply = await asyncio.wait_for(reply_future, timeout=timeout)
+                return reply
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout waiting for reply from {instance_id}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to send to {instance_id}: {e}")
+            await self.unregister(instance_id)
+            return None
+        finally:
+            self.pending_replies.pop(msg_id, None)
+    
+    def handle_reply(self, msg_id: str, reply: str):
+        """处理收到的回复"""
+        if msg_id in self.pending_replies:
+            self.pending_replies[msg_id].set_result(reply)
     
     def is_connected(self, instance_id: str) -> bool:
         """检查实例是否在线"""
@@ -121,10 +161,19 @@ class RelayWebSocket:
                     
                     if msg_type == "ping":
                         await websocket.send(json.dumps({"type": "pong"}))
-                    elif msg_type == "message":
+                    elif msg_type == "message" or msg_type == "reply":
                         # 收到客户端发来的消息（本地 OpenClaw 的回复）
-                        logger.info(f"Received message from {instance_id}: {data.get('message', '')[:50]}")
-                        # TODO: 可以转发给上游或存储
+                        msg_content = data.get("message", "")
+                        logger.info(f"Received message from {instance_id}: {msg_content[:50]}")
+                        
+                        # 检查是否是回复
+                        msg_id = data.get("msg_id")
+                        if msg_id and msg_id in self.pending_replies:
+                            # 直接设置回复内容
+                            self.handle_reply(msg_id, msg_content)
+                        else:
+                            # 否则转发给所有等待的请求（广播模式）
+                            pass
                     else:
                         logger.debug(f"Received from {instance_id}: {data}")
                         

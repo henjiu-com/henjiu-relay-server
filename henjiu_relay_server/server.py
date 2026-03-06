@@ -123,6 +123,7 @@ class SendMessageResponse(BaseModel):
     message_id: str | None = None
     instance_id: str | None = None
     error: str | None = None
+    reply: str | None = None  # OpenClaw 的回复内容
 
 
 # ============== Routes ==============
@@ -274,7 +275,7 @@ async def send_message(request: SendMessageRequest):
             error="instance_id is required",
         )
     
-    # 通过 WebSocket 发送
+    # 通过 WebSocket 发送并等待回复
     if ws_server.is_connected(instance_id):
         message = {
             "type": "message",
@@ -287,12 +288,14 @@ async def send_message(request: SendMessageRequest):
         if request.metadata:
             message["metadata"] = request.metadata
         
-        success = await ws_server.send_to_instance(instance_id, message)
+        # 发送消息并等待回复
+        reply = await ws_server.send_and_wait_reply(instance_id, message, timeout=30)
         
         return SendMessageResponse(
-            success=success,
+            success=reply is not None,
             instance_id=instance_id,
-            message_id=f"ws-{instance_id}" if success else None,
+            message_id=f"ws-{instance_id}" if reply is not None else None,
+            reply=reply,
         )
     
     # 如果没连接
