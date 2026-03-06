@@ -138,6 +138,10 @@ ADMIN_PAGE = """
                 <h3>编辑实例</h3>
                 <input type="hidden" id="editId">
                 <div class="form-group">
+                    <label>实例ID</label>
+                    <input type="text" id="editIdDisplay" readonly style="background:#e9ecef;">
+                </div>
+                <div class="form-group">
                     <label>名称</label>
                     <input type="text" id="editName" placeholder="实例名称">
                 </div>
@@ -241,6 +245,7 @@ ADMIN_PAGE = """
             const inst = instances.find(i => i.id === id);
             if (!inst) return;
             document.getElementById('editId').value = id;
+            document.getElementById('editIdDisplay').value = id;
             document.getElementById('editName').value = inst.name || '';
             document.getElementById('editUrl').value = inst.url || '';
             document.getElementById('editToken').value = inst.auth_token || '';
@@ -489,6 +494,10 @@ DASHBOARD_PAGE = """
                         <div class="status-badge ${statusClass}">${statusText}</div>
                     </div>
                     <div class="instance-body">
+                        <div class="info-row">
+                            <span class="info-label">ID</span>
+                            <span class="info-value">${inst.id}</span>
+                        </div>
                         <div class="info-row">
                             <span class="info-label">URL</span>
                             <span class="info-value">${inst.url}</span>
