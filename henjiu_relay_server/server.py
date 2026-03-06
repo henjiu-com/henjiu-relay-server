@@ -306,6 +306,140 @@ async def send_message(request: SendMessageRequest):
     )
 
 
+# ============== OpenAI 兼容接口 ==============
+
+class Message(BaseModel):
+    """消息格式"""
+    role: str = "user"
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    """OpenAI Chat Completion 请求格式"""
+    model: str  # 实例ID
+    messages: list[Message]
+    temperature: float | None = 0.7
+    max_tokens: int | None = None
+    stream: bool | None = False
+    # 其他可选字段
+    top_p: float | None = None
+    n: int | None = 1
+    stop: str | list[str] | None = None
+
+
+class ChatMessage(BaseModel):
+    """Chat message 响应格式"""
+    role: str
+    content: str
+
+
+class ChatChoice(BaseModel):
+    """Chat choice 响应格式"""
+    index: int
+    message: ChatMessage
+    finish_reason: str = "stop"
+
+
+class Usage(BaseModel):
+    """Token 使用统计"""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ChatCompletionResponse(BaseModel):
+    """OpenAI Chat Completion 响应格式"""
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: list[ChatChoice]
+    usage: Usage
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_auth)], response_model=ChatCompletionResponse)
+async def chat_completions(request: ChatCompletionRequest):
+    """OpenAI 兼容的 Chat Completion 接口
+    
+    使用方式:
+    - model: 使用实例ID (如 "cc2-openclaw")
+    - messages: 消息列表，格式同 OpenAI
+    - 认证: 使用 X-API-Key 头
+    
+    示例请求:
+    {
+        "model": "cc2-openclaw",
+        "messages": [
+            {"role": "user", "content": "你好"}
+        ]
+    }
+    
+    示例响应:
+    {
+        "id": "chatcmpl-xxx",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "cc2-openclaw",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "你好！"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+    }
+    """
+    import time
+    
+    instance_id = request.model
+    
+    if not instance_id:
+        raise HTTPException(status_code=400, detail="model is required")
+    
+    # 获取最后一条用户消息
+    user_message = None
+    for msg in reversed(request.messages):
+        if msg.role == "user":
+            user_message = msg.content
+            break
+    
+    if not user_message:
+        raise HTTPException(status_code=400, detail="No user message found")
+    
+    # 通过 WebSocket 发送并等待回复
+    if not ws_server.is_connected(instance_id):
+        raise HTTPException(status_code=400, detail=f"Instance {instance_id} not connected via WebSocket")
+    
+    message = {"type": "message", "message": user_message}
+    
+    # 发送消息并等待回复
+    reply = await ws_server.send_and_wait_reply(instance_id, message, timeout=60)
+    
+    if reply is None:
+        reply = "No response"
+    
+    # 构建响应
+    response = ChatCompletionResponse(
+        id=f"chatcmpl-{int(time.time() * 1000)}",
+        object="chat.completion",
+        created=int(time.time()),
+        model=instance_id,
+        choices=[
+            ChatChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=reply),
+                finish_reason="stop"
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=len(user_message) // 4,
+            completion_tokens=len(reply) // 4,
+            total_tokens=(len(user_message) + len(reply)) // 4
+        )
+    )
+    
+    return response
+
+
 @app.post("/api/webhook", dependencies=[Depends(verify_api_auth)])
 async def webhook(instance_id: str, payload: dict):
     """WebSocket 回调"""
