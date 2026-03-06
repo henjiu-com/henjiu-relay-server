@@ -140,10 +140,12 @@ curl -H "X-API-Key: your-api-key" http://localhost:8080/api/sessions
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | model | string | 是 | 实例ID (如 `cc2-openclaw`) |
-| messages | array | 是 | 消息列表，格式同 OpenAI |
+| messages | array | 是 | 消息数组，**只需一个元素**，取 `messages[0].content` 发送给 OpenClaw |
 | stream | boolean | 否 | 是否流式响应 (true/false) |
 | temperature | number | 否 | 温度参数 (默认 0.7) |
 | max_tokens | number | 否 | 最大 token 数 |
+
+**注意:** 上游应用发送的 messages 数组中，**只取第一个消息的 content** 发送给 OpenClaw 实例进行单轮对话。
 
 **请求示例 (非流式):**
 ```bash

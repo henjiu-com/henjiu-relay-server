@@ -399,15 +399,15 @@ async def chat_completions(request: ChatCompletionRequest):
     if not instance_id:
         raise HTTPException(status_code=400, detail="model is required")
     
-    # 获取最后一条用户消息
-    user_message = None
-    for msg in reversed(request.messages):
-        if msg.role == "user":
-            user_message = msg.content
-            break
+    # 获取第一个消息的 content (OpenClaw 只需要单轮对话)
+    if not request.messages or len(request.messages) == 0:
+        raise HTTPException(status_code=400, detail="messages is required")
+    
+    # 取第一个消息的内容
+    user_message = request.messages[0].content
     
     if not user_message:
-        raise HTTPException(status_code=400, detail="No user message found")
+        raise HTTPException(status_code=400, detail="message content is required")
     
     # 通过 WebSocket 发送并等待回复
     if not ws_server.is_connected(instance_id):
