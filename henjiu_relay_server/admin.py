@@ -461,7 +461,7 @@ DASHBOARD_PAGE = """
                         </div>
                         <div class="info-row">
                             <span class="info-label">认证</span>
-                            <span class="info-value">${inst.auth_type || '-'}</span>
+                            <span class="info-value">${inst.auth_token || '-'}</span>
                         </div>
                         <div class="info-row">
                             <span class="info-label">会话数</span>
@@ -556,7 +556,7 @@ async def dashboard_page(current_user: dict = Depends(verify_credentials)):
                 "id": inst.id if hasattr(inst, 'id') else inst.get('id'),
                 "name": inst.name if hasattr(inst, 'name') else inst.get('name'),
                 "url": inst.url if hasattr(inst, 'url') else inst.get('url'),
-                "auth_type": inst.auth.type if hasattr(inst, 'auth') and inst.auth else 'none'
+                "auth_token": inst.auth_token if hasattr(inst, 'auth_token') and inst.auth_token else (inst.auth.token if hasattr(inst, 'auth') and inst.auth and hasattr(inst.auth, 'token') else '')
             }
             instances.append(inst_dict)
     
@@ -586,7 +586,7 @@ async def dashboard_page(current_user: dict = Depends(verify_credentials)):
                 </div>
                 <div class="info-row">
                     <span class="info-label">类型</span>
-                    <span class="info-value">{inst.get('auth_type', 'none')}</span>
+                    <span class="info-value">${inst.get('auth_token', '-')}</span>
                 </div>
             </div>
         </div>

@@ -80,13 +80,15 @@ class MessageRouter:
         """列出所有实例"""
         result = []
         for inst in self.instances.values():
+            # 显示实际使用的 Token
+            auth_token = inst.auth_token or (inst.auth.token if inst.auth else "")
             item = {
                 "id": inst.id,
                 "name": inst.name,
                 "url": inst.url,
                 "enabled": inst.enabled,
-                "auth_type": inst.auth.type if inst.auth else "none",
-                "auth_token": inst.auth_token or (inst.auth.token if inst.auth else ""),
+                "auth_type": "bearer" if auth_token else "none",
+                "auth_token": auth_token,
             }
             if include_status:
                 # Will be filled by server
