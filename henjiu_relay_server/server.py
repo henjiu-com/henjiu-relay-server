@@ -25,15 +25,22 @@ async def verify_api_auth(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ):
-    """验证 API 认证 - 支持 API Key 或 Basic Auth"""
+    """验证 API 认证 - 支持 Bearer Token、API Key 或 Basic Auth"""
     
-    # 方法1: API Key (优先查数据库)
+    # 方法1: Bearer Token (OpenAI 标准)
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]  # 去掉 "Bearer " 前缀
+        user = await database.get_user_by_api_key(token)
+        if user and user.get("enabled"):
+            return user
+    
+    # 方法2: X-API-Key 头
     if x_api_key:
         user = await database.get_user_by_api_key(x_api_key)
         if user and user.get("enabled"):
             return user
     
-    # 方法2: Basic Auth
+    # 方法3: Basic Auth
     if authorization and authorization.startswith("Basic "):
         import base64
         try:
