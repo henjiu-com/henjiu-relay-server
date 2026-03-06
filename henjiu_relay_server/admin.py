@@ -134,6 +134,25 @@ ADMIN_PAGE = """
                 <button class="btn" onclick="hideAddForm()">取消</button>
             </div>
             
+            <div id="editForm" style="display:none; background:#fff3cd; padding:16px; border-radius:8px; margin-bottom:16px;">
+                <h3>编辑实例</h3>
+                <input type="hidden" id="editId">
+                <div class="form-group">
+                    <label>名称</label>
+                    <input type="text" id="editName" placeholder="实例名称">
+                </div>
+                <div class="form-group">
+                    <label>URL</label>
+                    <input type="text" id="editUrl" placeholder="http://192.168.1.10:18789">
+                </div>
+                <div class="form-group">
+                    <label>Token</label>
+                    <input type="text" id="editToken" placeholder="连接Token">
+                </div>
+                <button class="btn btn-success" onclick="saveEdit()">保存</button>
+                <button class="btn" onclick="hideEditForm()">取消</button>
+            </div>
+            
             <div class="instance-grid" id="instances"></div>
         </div>
         
@@ -155,20 +174,36 @@ ADMIN_PAGE = """
         let instances = [];
         
         async function loadInstances() {
-            const resp = await fetch('/api/instances');
-            const data = await resp.json();
-            instances = data.instances || [];
-            render();
+            try {
+                const headers = new Headers({});
+                // 检查 URL 是否已包含认证信息
+                if (!window.location.href.includes('@')) {
+                    headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+                }
+                const resp = await fetch('/api/instances', { headers });
+                if (!resp.ok) {
+                    console.log('加载失败:', resp.status);
+                    return;
+                }
+                const data = await resp.json();
+                if (data.instances && data.instances.length > 0) {
+                    instances = data.instances;
+                    render();
+                }
+            } catch(e) {
+                console.log('加载错误:', e);
+            }
         }
         
         function render() {
             const container = document.getElementById('instances');
             container.innerHTML = instances.map(inst => `
                 <div class="instance">
-                    <h3>${inst.name || inst.id} <span class="status ${inst.status || 'unknown'}">${inst.status || 'unknown'}</span></h3>
+                    <h3>${inst.name || inst.id} <span class="status ${inst.online ? 'status-online' : 'status-offline'}">${inst.online ? '在线' : '离线'}</span></h3>
                     <div class="url">${inst.url}</div>
                     <div style="margin-top:8px;">
                         <button class="btn btn-primary" onclick="checkStatus('${inst.id}')">检查</button>
+                        <button class="btn btn-warning" onclick="editInstance('${inst.id}')">编辑</button>
                         <button class="btn btn-danger" onclick="deleteInstance('${inst.id}')">删除</button>
                     </div>
                 </div>
@@ -177,7 +212,11 @@ ADMIN_PAGE = """
         
         async function checkStatus(id) {
             try {
-                const resp = await fetch('/api/instances/' + id + '/status');
+                const headers = new Headers({});
+                if (!window.location.href.includes('@')) {
+                    headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+                }
+                const resp = await fetch('/api/instances/' + id + '/status', { headers });
                 const data = await resp.json();
                 alert(id + ': ' + (data.online ? '在线' : '离线'));
                 loadInstances();
@@ -194,8 +233,60 @@ ADMIN_PAGE = """
         
         async function deleteInstance(id) {
             if (!confirm('确定删除 ' + id + '?')) return;
-            // TODO: 实现删除API
+            if (!confirm('再次确认：彻底删除实例 ' + id + '？此操作不可恢复！')) return;
             alert('删除功能开发中');
+        }
+        
+        function editInstance(id) {
+            const inst = instances.find(i => i.id === id);
+            if (!inst) return;
+            document.getElementById('editId').value = id;
+            document.getElementById('editName').value = inst.name || '';
+            document.getElementById('editUrl').value = inst.url || '';
+            document.getElementById('editToken').value = inst.auth_token || '';
+            document.getElementById('editForm').style.display = 'block';
+            document.getElementById('addForm').style.display = 'none';
+        }
+        
+        function hideEditForm() {
+            document.getElementById('editForm').style.display = 'none';
+        }
+        
+        async function saveEdit() {
+            const id = document.getElementById('editId').value;
+            const name = document.getElementById('editName').value;
+            const url = document.getElementById('editUrl').value;
+            const auth_token = document.getElementById('editToken').value;
+            
+            const headers = new Headers({
+                'Content-Type': 'application/json'
+            });
+            if (!window.location.href.includes('@')) {
+                headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+            }
+            
+            const body = {};
+            if (name) body.name = name;
+            if (url) body.url = url;
+            if (auth_token) body.auth_token = auth_token;
+            
+            try {
+                const resp = await fetch('/api/instances/' + id, {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('保存成功');
+                    hideEditForm();
+                    loadInstances();
+                } else {
+                    alert('保存失败: ' + data.error);
+                }
+            } catch(e) {
+                alert('保存失败: ' + e);
+            }
         }
         
         function showAddForm() {
@@ -321,7 +412,11 @@ DASHBOARD_PAGE = """
         
         async function loadInstances() {
             try {
-                const resp = await fetch('/api/instances');
+                const headers = new Headers({});
+                if (!window.location.href.includes('@')) {
+                    headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+                }
+                const resp = await fetch('/api/instances', { headers });
                 const data = await resp.json();
                 instances = data.instances || [];
                 renderInstances();
@@ -333,7 +428,11 @@ DASHBOARD_PAGE = """
         let sessionsData = {};
         async function loadSessions() {
             try {
-                const resp = await fetch('/api/sessions');
+                const headers = new Headers({});
+                if (!window.location.href.includes('@')) {
+                    headers.append('Authorization', 'Basic ' + btoa('admin:123456'));
+                }
+                const resp = await fetch('/api/sessions', { headers });
                 sessionsData = await resp.json();
             } catch(e) {
                 console.error(e);
@@ -345,10 +444,9 @@ DASHBOARD_PAGE = """
             container.innerHTML = instances.map(inst => {
                 const sessions = sessionsData[inst.id] || [];
                 const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
-                const statusClass = inst.status === 'online' ? 'status-online' : 
-                                   inst.status === 'offline' ? 'status-offline' : 'status-checking';
-                const statusText = inst.status === 'online' ? '🟢 在线' : 
-                                  inst.status === 'offline' ? '🔴 离线' : '🟡 未知';
+                const isOnline = inst.online === true;
+                const statusClass = isOnline ? 'status-online' : 'status-offline';
+                const statusText = isOnline ? '🟢 在线' : '🔴 离线';
                 
                 return `
                 <div class="instance-card">
@@ -381,8 +479,8 @@ DASHBOARD_PAGE = """
         
         function updateStats() {
             document.getElementById('totalInstances').textContent = instances.length;
-            document.getElementById('onlineInstances').textContent = instances.filter(i => i.status === 'online').length;
-            document.getElementById('offlineInstances').textContent = instances.filter(i => i.status === 'offline').length;
+            document.getElementById('onlineInstances').textContent = instances.filter(i => i.online === true).length;
+            document.getElementById('offlineInstances').textContent = instances.filter(i => i.online === false).length;
             
             let totalSessions = 0;
             for (const sid in sessionsData) {

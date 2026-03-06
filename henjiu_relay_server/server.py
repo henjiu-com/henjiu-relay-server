@@ -110,12 +110,11 @@ app.include_router(admin_router)
 
 class SendMessageRequest(BaseModel):
     """发送消息请求"""
-    message: str
-    target: str | None = None
-    channel: str = "telegram"
-    sender_id: str | None = None
-    instance_id: str | None = None
-    metadata: dict | None = None
+    message: str  # 消息内容
+    target: str | None = None  # 可选，目标用户/聊天ID
+    sender_id: str | None = None  # 可选，发送者ID
+    instance_id: str  # 必须，指定发送到哪个 OpenClaw 实例
+    metadata: dict | None = None  # 可选，元数据
 
 
 class SendMessageResponse(BaseModel):
@@ -217,6 +216,33 @@ async def get_instance_status(instance_id: str):
     return {"id": instance_id, "online": False, "error": "Not found"}
 
 
+class UpdateInstanceRequest(BaseModel):
+    """更新实例请求"""
+    name: str | None = None
+    url: str | None = None
+    auth_token: str | None = None
+    enabled: bool | None = None
+
+
+@app.put("/api/instances/{instance_id}", dependencies=[Depends(verify_api_auth)])
+async def update_instance(instance_id: str, request: UpdateInstanceRequest):
+    """更新实例配置"""
+    update_data = request.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        return {"success": False, "error": "No fields to update"}
+    
+    # 更新数据库
+    success = await database.update_instance(instance_id, **update_data)
+    
+    if success:
+        # 重新加载路由配置
+        router.reload()
+        return {"success": True, "message": f"Instance {instance_id} updated"}
+    
+    return {"success": False, "error": "Instance not found"}
+
+
 @app.post("/api/reload", dependencies=[Depends(verify_api_auth)])
 async def reload_config():
     """重新加载配置"""
@@ -229,22 +255,23 @@ async def reload_config():
 
 @app.post("/api/send", dependencies=[Depends(verify_api_auth)], response_model=SendMessageResponse)
 async def send_message(request: SendMessageRequest):
-    """发送消息到远程 OpenClaw (通过 WebSocket)"""
-    # 确定目标实例
+    """发送消息到远程 OpenClaw (通过 WebSocket)
+    
+    请求格式:
+    {
+        "message": "消息内容",
+        "instance_id": "cc2-openclaw",  // 必须，实例ID
+        "target": "user123",             // 可选，目标用户ID
+        "sender_id": "sender456",         // 可选，发送者ID
+        "metadata": {}                    // 可选，元数据
+    }
+    """
     instance_id = request.instance_id
-    if not instance_id:
-        inst = router.get_instance(
-            channel=request.channel,
-            sender_id=request.sender_id or "",
-            message=request.message,
-        )
-        if inst:
-            instance_id = inst.id
     
     if not instance_id:
         return SendMessageResponse(
             success=False,
-            error="No instance found",
+            error="instance_id is required",
         )
     
     # 通过 WebSocket 发送
@@ -252,10 +279,11 @@ async def send_message(request: SendMessageRequest):
         message = {
             "type": "message",
             "message": request.message,
-            "channel": request.channel,
         }
         if request.target:
             message["target"] = request.target
+        if request.sender_id:
+            message["sender_id"] = request.sender_id
         if request.metadata:
             message["metadata"] = request.metadata
         
@@ -267,17 +295,11 @@ async def send_message(request: SendMessageRequest):
             message_id=f"ws-{instance_id}" if success else None,
         )
     
-    # 如果没连接，尝试 HTTP 回退
-    if instance_id in router.instances:
-        return SendMessageResponse(
-            success=False,
-            error=f"Instance {instance_id} not connected via WebSocket",
-            instance_id=instance_id,
-        )
-    
+    # 如果没连接
     return SendMessageResponse(
         success=False,
-        error=f"Unknown instance: {instance_id}",
+        error=f"Instance {instance_id} not connected via WebSocket",
+        instance_id=instance_id,
     )
 
 

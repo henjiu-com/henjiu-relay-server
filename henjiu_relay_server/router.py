@@ -86,6 +86,7 @@ class MessageRouter:
                 "url": inst.url,
                 "enabled": inst.enabled,
                 "auth_type": inst.auth.type if inst.auth else "none",
+                "auth_token": inst.auth_token or (inst.auth.token if inst.auth else ""),
             }
             if include_status:
                 # Will be filled by server
