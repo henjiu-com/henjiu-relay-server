@@ -2,24 +2,24 @@
  * OpenClaw Relay Channel Plugin
  * 
  * 用法:
- * 1. 复制到扩展目录: ~/.openclaw/extensions/relay/
+ * 1. 复制到扩展目录: ~/.openclaw/extensions/henjiu-connector/
  * 2. 在 config 中启用
  */
 
 import { WebSocket } from "ws";
 
 // 默认配置
-const DEFAULT_RELAY_URL = "ws://localhost:8081";
+const DEFAULT_CONNECTOR_URL = "ws://localhost:8081";
 
 export const relayChannelPlugin = {
-  id: "relay",
+  id: "henjiu-connector",
   meta: {
-    id: "relay",
+    id: "henjiu-connector",
     label: "Henjiu Relay",
     selectionLabel: "Henjiu Relay",
     docsPath: "",
     blurb: "Connect to OpenClaw Relay server via WebSocket",
-    aliases: ["relay"],
+    aliases: ["henjiu-connector"],
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -29,7 +29,7 @@ export const relayChannelPlugin = {
     nativeCommands: false,
     blockStreaming: false,
   },
-  reload: { configPrefixes: ["channels.relay"] },
+  reload: { configPrefixes: ["channels.henjiu-connector"] },
   configSchema: {
     schema: {
       $schema: "http://json-schema.org/draft-07/schema#",
@@ -41,7 +41,7 @@ export const relayChannelPlugin = {
           description: "Enable Relay channel",
           default: false,
         },
-        relayUrl: {
+        connectorUrl: {
           type: "string",
           description: "Relay WebSocket server URL",
           default: "ws://localhost:8081",
@@ -49,7 +49,7 @@ export const relayChannelPlugin = {
         instanceId: {
           type: "string",
           description: "Unique instance ID for this client",
-          default: "relay-client",
+          default: "henjiu-connector-client",
         },
         instanceName: {
           type: "string",
@@ -66,19 +66,19 @@ export const relayChannelPlugin = {
   },
 
   async setup(api) {
-    const config = api.config.channels?.relay || {};
+    const config = api.config.channels?.henjiu-connector || {};
     
     if (!config.enabled) {
       api.logger.info("Relay channel: disabled");
       return;
     }
 
-    const relayUrl = config.relayUrl || DEFAULT_RELAY_URL;
-    const instanceId = config.instanceId || "relay-client";
+    const connectorUrl = config.connectorUrl || DEFAULT_CONNECTOR_URL;
+    const instanceId = config.instanceId || "henjiu-connector-client";
     const instanceName = config.instanceName || "OpenClaw";
     const authToken = config.authToken || "";
 
-    api.logger.info(`Relay channel: connecting to ${relayUrl} as ${instanceId}`);
+    api.logger.info(`Relay channel: connecting to ${connectorUrl} as ${instanceId}`);
 
     let ws = null;
     let reconnectTimer = null;
@@ -91,10 +91,10 @@ export const relayChannelPlugin = {
       }
 
       try {
-        ws = new WebSocket(relayUrl);
+        ws = new WebSocket(connectorUrl);
 
         ws.on("open", () => {
-          api.logger.info(`Relay channel: connected to ${relayUrl}`);
+          api.logger.info(`Relay channel: connected to ${connectorUrl}`);
           
           // 发送注册消息 (包含认证Token)
           ws.send(JSON.stringify({
