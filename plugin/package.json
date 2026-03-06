@@ -1,0 +1,17 @@
+{
+  "name": "openclaw-henjiu-relay",
+  "version": "0.1.0",
+  "description": "OpenClaw Henjiu Relay Channel Plugin",
+  "main": "index.js",
+  "type": "module",
+  "keywords": ["openclaw", "henjiu", "relay", "websocket"],
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
