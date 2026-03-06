@@ -364,16 +364,17 @@ class ChatCompletionResponse(BaseModel):
     usage: Usage
 
 
-@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_auth)], response_model=ChatCompletionResponse)
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_auth)])
 async def chat_completions(request: ChatCompletionRequest):
     """OpenAI 兼容的 Chat Completion 接口
     
     使用方式:
     - model: 使用实例ID (如 "cc2-openclaw")
     - messages: 消息列表，格式同 OpenAI
-    - 认证: 使用 X-API-Key 头
+    - stream: 是否使用流式响应 (true/false)
+    - 认证: 使用 Bearer Token
     
-    示例请求:
+    示例请求 (非流式):
     {
         "model": "cc2-openclaw",
         "messages": [
@@ -381,21 +382,17 @@ async def chat_completions(request: ChatCompletionRequest):
         ]
     }
     
-    示例响应:
+    示例请求 (流式):
     {
-        "id": "chatcmpl-xxx",
-        "object": "chat.completion",
-        "created": 1234567890,
         "model": "cc2-openclaw",
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": "你好！"},
-            "finish_reason": "stop"
-        }],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+        "messages": [
+            {"role": "user", "content": "你好"}
+        ],
+        "stream": true
     }
     """
     import time
+    from fastapi.responses import StreamingResponse
     
     instance_id = request.model
     
@@ -418,7 +415,34 @@ async def chat_completions(request: ChatCompletionRequest):
     
     message = {"type": "message", "message": user_message}
     
-    # 发送消息并等待回复
+    # 流式响应
+    if request.stream:
+        async def generate():
+            # 发送消息并获取回复
+            reply = await ws_server.send_and_wait_reply(instance_id, message, timeout=60)
+            
+            if reply is None:
+                reply = "No response"
+            
+            # 生成 SSE 流式数据
+            msg_id = f"chatcmpl-{int(time.time() * 1000)}"
+            created = int(time.time())
+            
+            # 先发送角色消息
+            yield f"data: {{\"id\":\"{msg_id}\",\"object\":\"chat.completion.chunk\",\"created\":{created},\"model\":\"{instance_id}\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\"}},\"finish_reason\":null}}]}}\n\n"
+            
+            # 分块发送内容 (模拟流式)
+            for i in range(0, len(reply), 10):
+                chunk = reply[i:i+10]
+                yield f"data: {{\"id\":\"{msg_id}\",\"object\":\"chat.completion.chunk\",\"created\":{created},\"model\":\"{instance_id}\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{chunk}\"}},\"finish_reason\":null}}]}}\n\n"
+            
+            # 发送完成
+            yield f"data: {{\"id\":\"{msg_id}\",\"object\":\"chat.completion.chunk\",\"created\":{created},\"model\":\"{instance_id}\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\n"
+            yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(generate(), media_type="text/event-stream")
+    
+    # 非流式响应
     reply = await ws_server.send_and_wait_reply(instance_id, message, timeout=60)
     
     if reply is None:

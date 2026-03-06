@@ -126,6 +126,85 @@ curl -H "X-API-Key: your-api-key" http://localhost:8080/api/instances
 curl -H "X-API-Key: your-api-key" http://localhost:8080/api/sessions
 ```
 
+## OpenAI 兼容接口
+
+推荐使用 OpenAI 兼容接口，标准化且支持流式响应。
+
+### Chat Completions
+
+**端点:** `POST /v1/chat/completions`
+
+**认证:** `Authorization: Bearer <API_KEY>`
+
+**请求参数:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| model | string | 是 | 实例ID (如 `cc2-openclaw`) |
+| messages | array | 是 | 消息列表，格式同 OpenAI |
+| stream | boolean | 否 | 是否流式响应 (true/false) |
+| temperature | number | 否 | 温度参数 (默认 0.7) |
+| max_tokens | number | 否 | 最大 token 数 |
+
+**请求示例 (非流式):**
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "cc2-openclaw",
+    "messages": [
+      {"role": "user", "content": "你好"}
+    ]
+  }'
+```
+
+**响应示例 (非流式):**
+```json
+{
+  "id": "chatcmpl-1234567890",
+  "object": "chat.completion",
+  "created": 1234567890,
+  "model": "cc2-openclaw",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": "你好！有什么可以帮你的？"},
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  }
+}
+```
+
+**请求示例 (流式):**
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "cc2-openclaw",
+    "messages": [
+      {"role": "user", "content": "你好"}
+    ],
+    "stream": true
+  }'
+```
+
+**响应示例 (流式):**
+```
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"cc2-openclaw","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"cc2-openclaw","choices":[{"index":0,"delta":{"content":"你"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"cc2-openclaw","choices":[{"index":0,"delta":{"content":"好"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"cc2-openclaw","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
 ## Connector 配置
 
 每个 OpenClaw 实例需要运行 connector 来连接 relay 服务器：
